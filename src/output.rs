@@ -3,6 +3,7 @@
 //! Supports two formats: `table` (human-readable) and `json` (machine-readable).
 
 use std::io::{self, Write as _};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -29,12 +30,26 @@ pub(crate) struct ProcessVerdict {
     pub verdict: Verdict,
     /// Evidence details supporting the verdict.
     pub evidence: Evidence,
+    /// Path to the mapped source repository (`null` when no mapping or `--no-source`).
+    pub source_repo: Option<PathBuf>,
+    /// Timestamp (Unix seconds) of the newest commit touching `src/` (`null` when unavailable).
+    pub source_head_ts: Option<u64>,
+    /// Short SHA of the newest `src/` commit (`null` when unavailable).
+    pub source_head_commit: Option<String>,
 }
 
 impl ProcessVerdict {
     /// Build a `ProcessVerdict` from a collected [`ProcInfo`] and classified verdict.
     #[must_use]
-    pub(crate) fn from_info_and_verdict(info: &ProcInfo, verdict: Verdict, evidence: Evidence) -> Self {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_info_and_verdict(
+        info: &ProcInfo,
+        verdict: Verdict,
+        evidence: Evidence,
+        source_repo: Option<PathBuf>,
+        source_head_ts: Option<u64>,
+        source_head_commit: Option<String>,
+    ) -> Self {
         Self {
             pid: info.pid,
             comm: info.comm.clone(),
@@ -45,6 +60,9 @@ impl ProcessVerdict {
             proc_start: info.proc_start_secs,
             verdict,
             evidence,
+            source_repo,
+            source_head_ts,
+            source_head_commit,
         }
     }
 }

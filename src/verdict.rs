@@ -21,6 +21,10 @@ pub(crate) enum Verdict {
     /// xattr (or mtime when xattr absent) is newer than the process start time.
     /// The file was reinstalled after this process started.
     ProvStale,
+    /// Binary's effective build timestamp predates the newest source commit
+    /// touching `src/`. A fix has been committed but not yet rebuilt/installed.
+    /// Ranks below file-level verdicts; recorded in `evidence` when those win.
+    BehindHead,
     /// None of the above staleness conditions detected.
     Fresh,
 }
@@ -31,12 +35,17 @@ impl std::fmt::Display for Verdict {
             Self::DeletedExe => write!(f, "deleted-exe"),
             Self::InodeDrift => write!(f, "inode-drift"),
             Self::ProvStale => write!(f, "prov-stale"),
+            Self::BehindHead => write!(f, "behind-head"),
             Self::Fresh => write!(f, "fresh"),
         }
     }
 }
 
 /// Evidence collected during classification.
+// The boolean fields are distinct binary signals — each represents an
+// independent kernel observation. A state-machine or enum would obscure
+// that they can fire in combination (e.g., deleted-exe AND behind-head).
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Evidence {
     /// True if the exe readlink ends in ` (deleted)`.
@@ -47,6 +56,9 @@ pub(crate) struct Evidence {
     pub timestamp_newer: bool,
     /// How the timestamp was determined.
     pub timestamp_source: TimestampSource,
+    /// True if the binary's build timestamp predates the newest source commit.
+    /// Recorded even when a file-level verdict wins (see `behind_head` in output).
+    pub behind_head: bool,
 }
 
 /// How the on-disk binary's modification time was determined.
@@ -89,13 +101,19 @@ pub(crate) struct ProcInfo {
 
 /// Classify a process's binary staleness from its pre-collected [`ProcInfo`].
 ///
+/// `source_behind_head` is the result of the source-vs-binary comparison from
+/// [`crate::source::query_source_info`]. Pass `false` when `--no-source` is set
+/// or no repo mapping exists.
+///
 /// This is a pure function — no I/O. All observations must be pre-collected
 /// by [`crate::proc::collect_proc_info`].
 ///
 /// # Returns
 /// A `(Verdict, Evidence)` pair. The evidence records which signals fired.
+/// When a file-level verdict (deleted-exe / inode-drift / prov-stale) wins,
+/// `behind_head` is still recorded in the evidence if it fired.
 #[must_use]
-pub(crate) fn classify(info: &ProcInfo) -> (Verdict, Evidence) {
+pub(crate) fn classify(info: &ProcInfo, source_behind_head: bool) -> (Verdict, Evidence) {
     // Step 1: Check for kernel's (deleted) suffix — unambiguous.
     let exe_deleted = info.exe_readlink.ends_with(" (deleted)");
 
@@ -111,14 +129,24 @@ pub(crate) fn classify(info: &ProcInfo) -> (Verdict, Evidence) {
         (false, TimestampSource::Unavailable)
     } else {
         match (info.proc_start_secs, info.prov_ts, info.ondisk_mtime) {
-            (Some(start), Some(prov), _) => {
-                (prov > start, TimestampSource::ProvXattr)
-            }
-            (Some(start), None, Some(mtime)) => {
-                (mtime > start, TimestampSource::MtimeFallback)
-            }
+            (Some(start), Some(prov), _) => (prov > start, TimestampSource::ProvXattr),
+            (Some(start), None, Some(mtime)) => (mtime > start, TimestampSource::MtimeFallback),
             _ => (false, TimestampSource::Unavailable),
         }
+    };
+
+    // Step 4: Select primary verdict. File-level verdicts outrank behind-head.
+    // behind-head is always recorded in evidence even when it doesn't win.
+    let verdict = if exe_deleted {
+        Verdict::DeletedExe
+    } else if inode_mismatch {
+        Verdict::InodeDrift
+    } else if timestamp_newer {
+        Verdict::ProvStale
+    } else if source_behind_head {
+        Verdict::BehindHead
+    } else {
+        Verdict::Fresh
     };
 
     let evidence = Evidence {
@@ -126,16 +154,7 @@ pub(crate) fn classify(info: &ProcInfo) -> (Verdict, Evidence) {
         inode_mismatch,
         timestamp_newer,
         timestamp_source,
-    };
-
-    let verdict = if exe_deleted {
-        Verdict::DeletedExe
-    } else if inode_mismatch {
-        Verdict::InodeDrift
-    } else if timestamp_newer {
-        Verdict::ProvStale
-    } else {
-        Verdict::Fresh
+        behind_head: source_behind_head,
     };
 
     (verdict, evidence)
@@ -161,18 +180,19 @@ mod tests {
     #[test]
     fn fresh_verdict_all_match() {
         let info = base_info();
-        let (verdict, ev) = classify(&info);
+        let (verdict, ev) = classify(&info, false);
         assert_eq!(verdict, Verdict::Fresh);
         assert!(!ev.exe_deleted_suffix);
         assert!(!ev.inode_mismatch);
         assert!(!ev.timestamp_newer);
+        assert!(!ev.behind_head);
     }
 
     #[test]
     fn deleted_exe_verdict() {
         let mut info = base_info();
         info.exe_readlink = "/tmp/test-binary (deleted)".to_owned();
-        let (verdict, ev) = classify(&info);
+        let (verdict, ev) = classify(&info, false);
         assert_eq!(verdict, Verdict::DeletedExe);
         assert!(ev.exe_deleted_suffix);
     }
@@ -181,7 +201,7 @@ mod tests {
     fn inode_drift_verdict() {
         let mut info = base_info();
         info.ondisk_inode = Some(200); // differs from proc_exe_inode=100
-        let (verdict, ev) = classify(&info);
+        let (verdict, ev) = classify(&info, false);
         assert_eq!(verdict, Verdict::InodeDrift);
         assert!(ev.inode_mismatch);
     }
@@ -190,7 +210,7 @@ mod tests {
     fn prov_stale_via_xattr() {
         let mut info = base_info();
         info.prov_ts = Some(1_000_001); // reinstalled after process started at 1_000_000
-        let (verdict, ev) = classify(&info);
+        let (verdict, ev) = classify(&info, false);
         assert_eq!(verdict, Verdict::ProvStale);
         assert!(ev.timestamp_newer);
         assert_eq!(ev.timestamp_source, TimestampSource::ProvXattr);
@@ -200,7 +220,7 @@ mod tests {
     fn prov_stale_via_mtime_fallback() {
         let mut info = base_info();
         info.ondisk_mtime = Some(1_000_001); // mtime newer than proc start
-        let (verdict, ev) = classify(&info);
+        let (verdict, ev) = classify(&info, false);
         assert_eq!(verdict, Verdict::ProvStale);
         assert!(ev.timestamp_newer);
         assert_eq!(ev.timestamp_source, TimestampSource::MtimeFallback);
@@ -211,7 +231,7 @@ mod tests {
         let mut info = base_info();
         info.prov_ts = None;
         info.ondisk_mtime = Some(999_999); // older than proc start
-        let (verdict, _) = classify(&info);
+        let (verdict, _) = classify(&info, false);
         assert_eq!(verdict, Verdict::Fresh);
     }
 
@@ -220,7 +240,7 @@ mod tests {
         let mut info = base_info();
         info.exe_readlink = "/tmp/test-binary (deleted)".to_owned();
         info.ondisk_inode = Some(200); // would be inode-drift too
-        let (verdict, _) = classify(&info);
+        let (verdict, _) = classify(&info, false);
         assert_eq!(verdict, Verdict::DeletedExe);
     }
 
@@ -228,8 +248,27 @@ mod tests {
     fn missing_inodes_not_inode_drift() {
         let mut info = base_info();
         info.proc_exe_inode = None; // stat failed
-        let (verdict, ev) = classify(&info);
+        let (verdict, ev) = classify(&info, false);
         assert!(!ev.inode_mismatch);
         assert_eq!(verdict, Verdict::Fresh); // can't determine drift, default fresh
+    }
+
+    #[test]
+    fn behind_head_verdict_when_source_newer() {
+        let info = base_info(); // fresh file-level signals
+        let (verdict, ev) = classify(&info, true);
+        assert_eq!(verdict, Verdict::BehindHead);
+        assert!(ev.behind_head);
+    }
+
+    #[test]
+    fn file_level_verdict_wins_over_behind_head() {
+        // deleted-exe should win even when behind_head is also true
+        let mut info = base_info();
+        info.exe_readlink = "/tmp/test-binary (deleted)".to_owned();
+        let (verdict, ev) = classify(&info, true);
+        assert_eq!(verdict, Verdict::DeletedExe, "file-level must outrank behind-head");
+        // behind_head is still recorded in evidence
+        assert!(ev.behind_head, "behind_head recorded in evidence even when outranked");
     }
 }
