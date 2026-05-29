@@ -1,0 +1,126 @@
+{
+  "schema": "autobuilder.intent_card.v1",
+  "intent_slug": "binstale",
+  "prd_source": "/home/jsy/wintermute/autobuilder/PRD-binstale.md",
+  "root_motivation": "Running daemons can silently execute stale binaries after reinstalls — nothing on this laptop detects it automatically. The self-review journal re-discovers the same 'agorabus stale binary' finding every tick because no tool computes the verdict. binstale makes this a single CLI invocation rather than a recurring manual investigation.",
+  "user_persona": "Joe Yen running ~/wintermute system daemons (agorabus, recalld, wm-*) on Arch Linux. Runs binstale from self-review hooks or interactively to check whether long-running processes are executing binaries that have been reinstalled underneath them.",
+  "unfakeable_metric": {
+    "name": "acceptance_tests_passing_count",
+    "lower_is_better": false,
+    "harness_command": "cargo test --workspace --no-fail-fast 2>&1 | grep -cE '^test .* \\.\\.\\..*ok'",
+    "target": 6
+  },
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "level": "MUST",
+      "description": "`binstale check <pid>` against a process whose /proc/PID/exe readlink ends in ' (deleted)' returns verdict `deleted-exe` and exit code 1. Test: fork from temp binary, unlink it, check child PID.",
+      "test": "tests/acceptance_ac1.rs: fn deleted_exe_verdict()"
+    },
+    {
+      "id": "AC2",
+      "level": "MUST",
+      "description": "`binstale check <pid>` against a process whose backing binary was replaced via atomic rename returns `inode-drift` verdict. Test: copy sleeper to tmp, exec it, rename new copy over path, check running PID.",
+      "test": "tests/acceptance_ac2.rs: fn inode_drift_verdict()"
+    },
+    {
+      "id": "AC3",
+      "level": "MUST",
+      "description": "`binstale check <pid>` against a process whose binary is unchanged since exec returns `fresh` and exit code 0. Test: spawn a long-sleep process from an unmodified binary.",
+      "test": "tests/acceptance_ac3.rs: fn fresh_verdict()"
+    },
+    {
+      "id": "AC4",
+      "level": "MUST",
+      "description": "`binstale scan --match '^sleep$'` (or a controlled regex) lists one row per matching process with a verdict column; `--format json` emits valid JSON with documented keys: pid, comm, exe_path, exe_inode, ondisk_inode, prov_ts, proc_start, verdict, evidence.",
+      "test": "tests/acceptance_ac4.rs: fn scan_json_output()"
+    },
+    {
+      "id": "AC5",
+      "level": "MUST",
+      "description": "When on-disk binary has no user.prov.* xattr, binstale does not error — it falls back to mtime and records prov_ts: null in JSON.",
+      "test": "tests/acceptance_ac5.rs: fn no_xattr_fallback()"
+    },
+    {
+      "id": "AC6",
+      "level": "MUST",
+      "description": "`binstale check <nonexistent-pid>` exits 2 with a clear stderr message and emits no partial JSON.",
+      "test": "tests/acceptance_ac6.rs: fn nonexistent_pid_exits_2()"
+    },
+    {
+      "id": "AC7",
+      "level": "SHOULD",
+      "description": "Unit tests for the verdict classifier (pure-function tests over synthetic ProcInfo structs) pass: deleted_exe, inode_drift, prov_stale, fresh cases each covered.",
+      "test": "tests/acceptance_ac7.rs: fn verdict_classifier_unit_tests()"
+    },
+    {
+      "id": "AC8",
+      "level": "SHOULD",
+      "description": "`binstale --help`, `binstale scan --help` document every flag and the verdict taxonomy; `binstale --version` returns `binstale 0.1.0`.",
+      "test": "tests/acceptance_ac8.rs: fn help_and_version()"
+    }
+  ],
+  "scope": [
+    "Read /proc/PID/exe via readlink to detect (deleted) suffix",
+    "Compare exe inode vs on-disk inode via stat calls to detect inode-drift",
+    "Read user.prov.ts xattr from on-disk binary; fall back to mtime",
+    "Read process start time from /proc/PID/stat field 22 + /proc/stat btime + sysconf(CLK_TCK)",
+    "Classify each process as: deleted-exe | inode-drift | prov-stale | fresh",
+    "binstale check <pid> subcommand for single-process verdict",
+    "binstale scan --match <regex> subcommand scanning /proc/*/comm and cmdline",
+    "JSON and table output formats",
+    "Exit codes: 0=all-fresh, 1=any-stale, 2=usage/IO error"
+  ],
+  "non_goals": [
+    "Never restarts, reinstalls, or signals any process — detection only",
+    "No async runtime (tokio) — synchronous /proc reads only",
+    "No remote process inspection — only local /proc filesystem",
+    "No continuous monitoring or daemon mode — one-shot invocation only",
+    "No stale shared-library detection (only executable binary staleness)",
+    "No Windows/macOS support — Linux /proc-specific"
+  ],
+  "hard_constraints": {
+    "rust_edition": "2024",
+    "target_kind": "cli",
+    "deny_unsafe": true,
+    "max_deps": 8,
+    "msrv": "1.85",
+    "additional": {
+      "no_tokio": "synchronous /proc reads only; no async runtime",
+      "linux_only": "uses /proc filesystem and Linux xattr APIs"
+    }
+  },
+  "five_whys_trace": [
+    {
+      "why": 1,
+      "q": "Why do you need a tool to detect stale running binaries?",
+      "a": "The agorabus daemon (pid 2138939) is executing a binary whose inode was unlinked at 20:52 reinstall, but the process is still running the old code. /proc/2138939/exe shows '(deleted)'."
+    },
+    {
+      "why": 2,
+      "q": "Why does it matter that agorabus is running a deleted binary?",
+      "a": "A reinstall may fix a bug or change behavior, but the running daemon silently ignores the fix until restarted. Every tick that talks to a stale agorabus gets the old behavior without knowing it."
+    },
+    {
+      "why": 3,
+      "q": "Why is the current self-review finding it manually every time rather than automatically?",
+      "a": "No tool computes the staleness verdict. The run-18 journal notes this is the third time across runs 16-18 it was discovered manually — three consecutive self-review cycles burned on the same re-discovery."
+    },
+    {
+      "why": 4,
+      "q": "Why not just check /proc/*/exe for '(deleted)' in a shell one-liner?",
+      "a": "The (deleted) suffix is only one staleness signal. Atomic rename replaces the inode without leaving (deleted). And provfs xattr provides a third independent signal when the inode is ambiguous. A single shell grep misses two of the three cases."
+    }
+  ],
+  "ambiguities_resolved": [
+    {
+      "question": "Does prov-stale require provfs LSM to be running?",
+      "resolution": "Graceful fallback: when user.prov.ts xattr is absent (provfs not running or filesystem doesn't support xattrs), fall back to comparing on-disk mtime vs proc_start. prov_ts: null in JSON output. Never error on absent xattr."
+    },
+    {
+      "question": "What exit code when scan finds zero matching processes?",
+      "resolution": "Exit 0 (no stale processes found — empty set is fresh). Only exit 1 when ≥1 verdict is non-fresh."
+    }
+  ],
+  "created_at": "2026-05-29T12:05:37Z"
+}

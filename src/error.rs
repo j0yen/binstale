@@ -1,0 +1,57 @@
+//! Error types for binstale.
+
+use thiserror::Error;
+
+/// All errors that binstale can produce.
+#[derive(Debug, Error)]
+pub(crate) enum BinstaleError {
+    /// A process with the given PID does not exist in `/proc`.
+    #[error("process not found: PID {pid}")]
+    ProcessNotFound {
+        /// The PID that was not found.
+        pid: u32,
+    },
+
+    /// Failed to read a file from `/proc`.
+    #[error("failed to read /proc path {path}: {source}")]
+    ProcRead {
+        /// The path that could not be read.
+        path: String,
+        /// The underlying I/O error.
+        source: std::io::Error,
+    },
+
+    /// Failed to parse a value from `/proc`.
+    #[error("parse error: {context}")]
+    ParseError {
+        /// Description of what failed to parse.
+        context: String,
+    },
+
+    /// Failed to read an xattr from an on-disk path.
+    #[error("xattr read failed for {path}: {source}")]
+    XattrRead {
+        /// The file path whose xattr read failed.
+        path: String,
+        /// The underlying I/O error.
+        source: std::io::Error,
+    },
+
+    /// An invalid regex was provided.
+    #[error("invalid regex: {source}")]
+    InvalidRegex {
+        /// The underlying regex error.
+        #[from]
+        source: regex::Error,
+    },
+}
+
+/// Exit code constants matching the PRD specification.
+pub(crate) mod exit_code {
+    /// All scanned processes are fresh.
+    pub(crate) const FRESH: i32 = 0;
+    /// At least one process has a non-fresh verdict.
+    pub(crate) const STALE: i32 = 1;
+    /// Usage error or I/O error.
+    pub(crate) const ERROR: i32 = 2;
+}
