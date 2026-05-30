@@ -1,10 +1,10 @@
 [package]
 name = "binstale"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-description = "Running-binary staleness detector: classifies running processes as fresh | deleted-exe | inode-drift | prov-stale"
+description = "Running-binary staleness detector: classifies running processes as fresh | deleted-exe | inode-drift | prov-stale | behind-head"
 publish = false
 
 [lints.rust]
