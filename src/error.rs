@@ -4,7 +4,7 @@ use thiserror::Error;
 
 /// All errors that binstale can produce.
 #[derive(Debug, Error)]
-pub(crate) enum BinstaleError {
+pub enum BinstaleError {
     /// A process with the given PID does not exist in `/proc`.
     #[error("process not found: PID {pid}")]
     ProcessNotFound {
@@ -47,11 +47,11 @@ pub(crate) enum BinstaleError {
 }
 
 /// Exit code constants matching the PRD specification.
-pub(crate) mod exit_code {
+pub mod exit_code {
     /// All scanned processes are fresh.
-    pub(crate) const FRESH: i32 = 0;
+    pub const FRESH: i32 = 0;
     /// At least one process has a non-fresh verdict.
-    pub(crate) const STALE: i32 = 1;
+    pub const STALE: i32 = 1;
     /// Usage error or I/O error.
-    pub(crate) const ERROR: i32 = 2;
+    pub const ERROR: i32 = 2;
 }

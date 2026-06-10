@@ -1,6 +1,6 @@
 [package]
 name = "binstale"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -42,6 +42,14 @@ missing_panics_doc = "warn"
 # In a binary crate with private modules, pub(crate) satisfies unreachable_pub
 # but clippy::redundant_pub_crate flags it; allow it here.
 redundant_pub_crate = "allow"
+
+[[bin]]
+name = "binstale"
+path = "src/main.rs"
+
+[lib]
+name = "binstale"
+path = "src/lib.rs"
 
 [profile.dev]
 opt-level = 0

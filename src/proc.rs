@@ -24,7 +24,7 @@ const fn clk_tck() -> u64 {
 ///
 /// # Errors
 /// Returns an error if `/proc/stat` cannot be read or does not contain `btime`.
-pub(crate) fn read_btime() -> Result<u64, BinstaleError> {
+pub fn read_btime() -> Result<u64, BinstaleError> {
     let content = fs::read_to_string("/proc/stat")
         .map_err(|e| BinstaleError::ProcRead { path: "/proc/stat".into(), source: e })?;
 
@@ -50,7 +50,7 @@ pub(crate) fn read_btime() -> Result<u64, BinstaleError> {
 ///
 /// # Errors
 /// Returns an error if the file cannot be read or field 22 cannot be parsed.
-pub(crate) fn read_proc_starttime_ticks(pid: u32) -> Result<u64, BinstaleError> {
+pub fn read_proc_starttime_ticks(pid: u32) -> Result<u64, BinstaleError> {
     let path = format!("/proc/{pid}/stat");
     let content = fs::read_to_string(&path)
         .map_err(|e| BinstaleError::ProcRead { path: path.clone(), source: e })?;
@@ -87,7 +87,7 @@ pub(crate) fn read_proc_starttime_ticks(pid: u32) -> Result<u64, BinstaleError> 
 ///
 /// # Errors
 /// Returns an error if btime cannot be read.
-pub(crate) fn proc_start_to_secs(starttime_ticks: u64) -> Result<u64, BinstaleError> {
+pub fn proc_start_to_secs(starttime_ticks: u64) -> Result<u64, BinstaleError> {
     let btime = read_btime()?;
     let hz = clk_tck();
     Ok(btime + starttime_ticks / hz)
@@ -97,7 +97,7 @@ pub(crate) fn proc_start_to_secs(starttime_ticks: u64) -> Result<u64, BinstaleEr
 ///
 /// # Errors
 /// Returns an error if the file cannot be read.
-pub(crate) fn read_comm(pid: u32) -> Result<String, BinstaleError> {
+pub fn read_comm(pid: u32) -> Result<String, BinstaleError> {
     let path = format!("/proc/{pid}/comm");
     let raw = fs::read_to_string(&path)
         .map_err(|e| BinstaleError::ProcRead { path, source: e })?;
@@ -110,7 +110,7 @@ pub(crate) fn read_comm(pid: u32) -> Result<String, BinstaleError> {
 ///
 /// # Errors
 /// Returns an error if the file cannot be read.
-pub(crate) fn read_cmdline_argv0(pid: u32) -> Result<String, BinstaleError> {
+pub fn read_cmdline_argv0(pid: u32) -> Result<String, BinstaleError> {
     let path = format!("/proc/{pid}/cmdline");
     let raw = fs::read(&path)
         .map_err(|e| BinstaleError::ProcRead { path, source: e })?;
@@ -128,7 +128,7 @@ pub(crate) fn read_cmdline_argv0(pid: u32) -> Result<String, BinstaleError> {
 ///
 /// # Errors
 /// Returns an error if the symlink cannot be read (process may have exited).
-pub(crate) fn read_exe_readlink(pid: u32) -> Result<String, BinstaleError> {
+pub fn read_exe_readlink(pid: u32) -> Result<String, BinstaleError> {
     let path = format!("/proc/{pid}/exe");
     let target = fs::read_link(&path)
         .map_err(|e| BinstaleError::ProcRead { path, source: e })?;
@@ -139,7 +139,7 @@ pub(crate) fn read_exe_readlink(pid: u32) -> Result<String, BinstaleError> {
 ///
 /// # Errors
 /// Returns an error if stat fails.
-pub(crate) fn stat_proc_exe_inode(pid: u32) -> Result<u64, BinstaleError> {
+pub fn stat_proc_exe_inode(pid: u32) -> Result<u64, BinstaleError> {
     let path = format!("/proc/{pid}/exe");
     let meta = fs::metadata(&path)
         .map_err(|e| BinstaleError::ProcRead { path, source: e })?;
@@ -151,7 +151,7 @@ pub(crate) fn stat_proc_exe_inode(pid: u32) -> Result<u64, BinstaleError> {
 /// Strips the ` (deleted)` suffix before stat-ing.
 ///
 /// Returns `None` if the file does not exist on disk.
-pub(crate) fn stat_ondisk(path_with_possible_deleted: &str) -> Option<(u64, u64)> {
+pub fn stat_ondisk(path_with_possible_deleted: &str) -> Option<(u64, u64)> {
     let real_path = path_with_possible_deleted
         .strip_suffix(" (deleted)")
         .unwrap_or(path_with_possible_deleted);
@@ -169,7 +169,7 @@ pub(crate) fn stat_ondisk(path_with_possible_deleted: &str) -> Option<(u64, u64)
 ///
 /// # Errors
 /// Returns an error only on unexpected xattr read failures (not `ENODATA`/`ENOTSUP`).
-pub(crate) fn read_prov_ts(path: &str) -> Result<Option<u64>, BinstaleError> {
+pub fn read_prov_ts(path: &str) -> Result<Option<u64>, BinstaleError> {
     let real_path = path.strip_suffix(" (deleted)").unwrap_or(path);
 
     match xattr::get(real_path, "user.prov.ts") {
@@ -201,7 +201,7 @@ pub(crate) fn read_prov_ts(path: &str) -> Result<Option<u64>, BinstaleError> {
 /// # Errors
 /// Returns [`BinstaleError::ProcessNotFound`] when `/proc/PID` does not exist.
 /// Returns other errors for unexpected I/O failures.
-pub(crate) fn collect_proc_info(pid: u32) -> Result<ProcInfo, BinstaleError> {
+pub fn collect_proc_info(pid: u32) -> Result<ProcInfo, BinstaleError> {
     // Verify the PID exists in /proc first.
     let proc_dir = PathBuf::from(format!("/proc/{pid}"));
     if !proc_dir.exists() {
@@ -242,7 +242,7 @@ pub(crate) fn collect_proc_info(pid: u32) -> Result<ProcInfo, BinstaleError> {
 /// # Errors
 /// Returns an error if `/proc` cannot be read. Individual PID read failures are
 /// silently skipped (processes can exit between iteration and read).
-pub(crate) fn scan_matching_pids(re: &regex::Regex) -> Result<Vec<u32>, BinstaleError> {
+pub fn scan_matching_pids(re: &regex::Regex) -> Result<Vec<u32>, BinstaleError> {
     let mut pids = Vec::new();
 
     let proc_dir = Path::new("/proc");

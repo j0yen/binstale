@@ -11,7 +11,7 @@ use crate::verdict::{Evidence, ProcInfo, Verdict};
 
 /// A single process's verdict result, ready for serialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ProcessVerdict {
+pub struct ProcessVerdict {
     /// Process ID.
     pub pid: u32,
     /// Process comm name.
@@ -42,7 +42,7 @@ impl ProcessVerdict {
     /// Build a `ProcessVerdict` from a collected [`ProcInfo`] and classified verdict.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn from_info_and_verdict(
+    pub fn from_info_and_verdict(
         info: &ProcInfo,
         verdict: Verdict,
         evidence: Evidence,
@@ -69,7 +69,7 @@ impl ProcessVerdict {
 
 /// Output format selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OutputFormat {
+pub enum OutputFormat {
     /// Human-readable table.
     Table,
     /// JSON (one object per line, or a JSON array).
@@ -83,7 +83,7 @@ pub(crate) enum OutputFormat {
 ///
 /// # Errors
 /// Returns an error if JSON serialization or I/O fails.
-pub(crate) fn print_verdicts(
+pub fn print_verdicts(
     verdicts: &[ProcessVerdict],
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {

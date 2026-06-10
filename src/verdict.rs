@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// Staleness verdict for a running process's binary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum Verdict {
+pub enum Verdict {
     /// The `/proc/PID/exe` symlink target ends in the kernel's ` (deleted)`
     /// marker. The backing inode has been unlinked. Highest confidence.
     DeletedExe,
@@ -47,7 +47,7 @@ impl std::fmt::Display for Verdict {
 // that they can fire in combination (e.g., deleted-exe AND behind-head).
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct Evidence {
+pub struct Evidence {
     /// True if the exe readlink ends in ` (deleted)`.
     pub exe_deleted_suffix: bool,
     /// True if the running inode differs from the on-disk inode.
@@ -64,7 +64,7 @@ pub(crate) struct Evidence {
 /// How the on-disk binary's modification time was determined.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum TimestampSource {
+pub enum TimestampSource {
     /// `user.prov.ts` xattr was present and used.
     ProvXattr,
     /// xattr absent; on-disk mtime used as fallback.
@@ -76,7 +76,7 @@ pub(crate) enum TimestampSource {
 /// All information about a running process needed for classification.
 /// Fields are the raw kernel observations; `classify()` is the pure decision function.
 #[derive(Debug, Clone)]
-pub(crate) struct ProcInfo {
+pub struct ProcInfo {
     /// PID of the process.
     pub pid: u32,
     /// Process comm name (from `/proc/PID/comm`).
@@ -113,7 +113,7 @@ pub(crate) struct ProcInfo {
 /// When a file-level verdict (deleted-exe / inode-drift / prov-stale) wins,
 /// `behind_head` is still recorded in the evidence if it fired.
 #[must_use]
-pub(crate) fn classify(info: &ProcInfo, source_behind_head: bool) -> (Verdict, Evidence) {
+pub fn classify(info: &ProcInfo, source_behind_head: bool) -> (Verdict, Evidence) {
     // Step 1: Check for kernel's (deleted) suffix — unambiguous.
     let exe_deleted = info.exe_readlink.ends_with(" (deleted)");
 

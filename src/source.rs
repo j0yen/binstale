@@ -46,7 +46,7 @@ struct ReposConfig {
 
 /// The outcome of a source-vs-binary comparison.
 #[derive(Debug, Clone)]
-pub(crate) struct SourceInfo {
+pub struct SourceInfo {
     /// Absolute path to the mapped source repository, if any.
     pub repo_path: Option<PathBuf>,
     /// Timestamp (Unix seconds) of the newest commit touching `src/` in the repo.
@@ -62,7 +62,7 @@ pub(crate) struct SourceInfo {
 /// User config wins when the same daemon name appears in both.
 ///
 /// Never errors — missing config is silently treated as empty.
-pub(crate) fn load_repo_map() -> HashMap<String, PathBuf> {
+pub fn load_repo_map() -> HashMap<String, PathBuf> {
     let home = home_dir();
     let mut map: HashMap<String, PathBuf> = HashMap::new();
 
@@ -97,7 +97,7 @@ pub(crate) fn load_repo_map() -> HashMap<String, PathBuf> {
 ///
 /// `binary_build_ts` is the effective build timestamp of the running binary
 /// (provfs `user.prov.ts` if present, otherwise binary mtime).
-pub(crate) fn query_source_info(
+pub fn query_source_info(
     comm: &str,
     binary_build_ts: Option<u64>,
     repo_map: &HashMap<String, PathBuf>,

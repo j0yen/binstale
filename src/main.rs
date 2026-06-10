@@ -3,23 +3,16 @@
 //! Classifies running processes as `fresh | deleted-exe | inode-drift | prov-stale | behind-head`
 //! using `/proc`, provfs xattr signals, and optional source-repository comparison.
 
-#![deny(clippy::unwrap_used, clippy::expect_used)]
-
 use std::process;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::error::exit_code;
-use crate::output::{OutputFormat, ProcessVerdict};
-use crate::proc::{collect_proc_info, scan_matching_pids};
-use crate::source::{load_repo_map, query_source_info};
-use crate::verdict::classify;
-
-mod error;
-mod output;
-mod proc;
-mod source;
-mod verdict;
+use binstale::error::exit_code;
+use binstale::fleet::{FleetFormat, collect_fleet, print_fleet};
+use binstale::output::{OutputFormat, ProcessVerdict};
+use binstale::proc::{collect_proc_info, scan_matching_pids};
+use binstale::source::{load_repo_map, query_source_info};
+use binstale::verdict::{classify, Verdict};
 
 /// Default daemon regex for `binstale scan` with no `--match`.
 const DEFAULT_MATCH: &str = r"^(agorabus|recalld|wm-(audio|dialog|stt|tts))$";
@@ -40,7 +33,7 @@ const DEFAULT_MATCH: &str = r"^(agorabus|recalld|wm-(audio|dialog|stt|tts))$";
 #[derive(Debug, Parser)]
 #[command(
     name = "binstale",
-    version = "0.2.0",
+    version = "0.3.0",
     about = "Running-binary staleness detector",
     long_about = "Classifies running processes as: fresh | deleted-exe | inode-drift | prov-stale | behind-head\n\
     \n\
@@ -98,15 +91,42 @@ enum Command {
         #[arg(long, value_enum, default_value_t = Format::Table)]
         format: Format,
     },
+
+    /// Aggregate fleet staleness report over the curated wintermute daemon list.
+    ///
+    /// Default targets: agorabus, recalld, wm-audio, wm-brain, wm-dialog, wm-stt, wm-tts.
+    /// Use `--all` to scan every running process (expensive).
+    ///
+    /// Exit codes: 0=all-fresh, 1=any-stale, 2=error
+    Fleet {
+        /// Scan all running /proc/PID/exe entries (expensive; overrides curated list).
+        #[arg(long)]
+        all: bool,
+
+        /// Output format: json (machine), human (table), docket (docket report lines).
+        #[arg(long, value_enum, default_value_t = FleetFormatArg::Human)]
+        format: FleetFormatArg,
+    },
 }
 
-/// Output format selection.
+/// Output format selection for `check` / `scan`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum Format {
     /// Human-readable table output.
     Table,
     /// JSON array output (one object per process).
     Json,
+}
+
+/// Output format for `fleet`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum FleetFormatArg {
+    /// JSON array (machine-readable).
+    Json,
+    /// Human-readable priority-sorted table.
+    Human,
+    /// Ready-to-run `docket report` lines for each non-fresh daemon.
+    Docket,
 }
 
 impl From<Format> for OutputFormat {
@@ -118,7 +138,26 @@ impl From<Format> for OutputFormat {
     }
 }
 
+impl From<FleetFormatArg> for FleetFormat {
+    fn from(f: FleetFormatArg) -> Self {
+        match f {
+            FleetFormatArg::Json => FleetFormat::Json,
+            FleetFormatArg::Human => FleetFormat::Human,
+            FleetFormatArg::Docket => FleetFormat::Docket,
+        }
+    }
+}
+
 fn main() {
+    // Reset SIGPIPE to default (SIG_DFL) before anything else.
+    // Without this, piping to `head` or `sh` causes a panic (exit 101).
+    // Per [[self_sigpipe_panic_toolkit]].
+    // SAFETY: called before any threads are spawned; no signal handlers registered yet.
+    #[allow(unsafe_code)]
+    unsafe {
+        reset_sigpipe();
+    }
+
     let cli = Cli::parse();
     let no_source = cli.no_source;
 
@@ -132,13 +171,33 @@ fn main() {
         Command::Scan { r#match: pattern, format } => {
             run_scan(&pattern, format.into(), no_source, &repo_map)
         }
+        Command::Fleet { all, format } => run_fleet(all, format.into(), no_source),
     };
 
     process::exit(exit);
 }
 
+/// Reset SIGPIPE to default (SIG_DFL) so that pipes to `head`/`sh` exit cleanly.
+///
+/// Without this, the Rust runtime catches SIGPIPE and converts it to a panic,
+/// producing unhelpful "broken pipe" error messages.
+///
+/// # Safety
+/// Must be called before any threads are spawned.
+#[allow(unsafe_code)]
+unsafe fn reset_sigpipe() {
+    unsafe extern "C" {
+        fn signal(signum: i32, handler: usize) -> usize;
+    }
+    const SIGPIPE: i32 = 13;
+    const SIG_DFL: usize = 0;
+    unsafe {
+        let _ = signal(SIGPIPE, SIG_DFL);
+    }
+}
+
 /// Compute the effective build timestamp for a process: provfs xattr first, mtime fallback.
-fn effective_build_ts(info: &crate::verdict::ProcInfo) -> Option<u64> {
+fn effective_build_ts(info: &binstale::verdict::ProcInfo) -> Option<u64> {
     info.prov_ts.or(info.ondisk_mtime)
 }
 
@@ -150,7 +209,7 @@ fn run_check(
     repo_map: &std::collections::HashMap<String, std::path::PathBuf>,
 ) -> i32 {
     match collect_proc_info(pid) {
-        Err(crate::error::BinstaleError::ProcessNotFound { pid: p }) => {
+        Err(binstale::error::BinstaleError::ProcessNotFound { pid: p }) => {
             eprintln!("binstale: process not found: PID {p}");
             exit_code::ERROR
         }
@@ -170,11 +229,11 @@ fn run_check(
                 src_info.head_ts,
                 src_info.head_commit,
             );
-            if let Err(e) = output::print_verdicts(&[pv], format) {
+            if let Err(e) = binstale::output::print_verdicts(&[pv], format) {
                 eprintln!("binstale: output error: {e}");
                 return exit_code::ERROR;
             }
-            if verdict == crate::verdict::Verdict::Fresh {
+            if verdict == Verdict::Fresh {
                 exit_code::FRESH
             } else {
                 exit_code::STALE
@@ -232,7 +291,7 @@ fn run_scan(
         }
     }
 
-    if let Err(e) = output::print_verdicts(&verdicts, format) {
+    if let Err(e) = binstale::output::print_verdicts(&verdicts, format) {
         eprintln!("binstale: output error: {e}");
         return exit_code::ERROR;
     }
@@ -243,11 +302,35 @@ fn run_scan(
 
     let any_stale = verdicts
         .iter()
-        .any(|v| v.verdict != crate::verdict::Verdict::Fresh);
+        .any(|v| v.verdict != Verdict::Fresh);
 
     if any_stale {
         exit_code::STALE
     } else {
         exit_code::FRESH
+    }
+}
+
+/// Run the `fleet` subcommand.
+fn run_fleet(all: bool, format: FleetFormat, no_source: bool) -> i32 {
+    match collect_fleet(all, no_source) {
+        Err(e) => {
+            eprintln!("binstale: fleet scan error: {e}");
+            exit_code::ERROR
+        }
+        Ok((entries, _had_errors)) => {
+            if let Err(e) = print_fleet(&entries, format) {
+                eprintln!("binstale: output error: {e}");
+                return exit_code::ERROR;
+            }
+            let any_stale = entries
+                .iter()
+                .any(|e| e.verdict != Verdict::Fresh);
+            if any_stale {
+                exit_code::STALE
+            } else {
+                exit_code::FRESH
+            }
+        }
     }
 }
