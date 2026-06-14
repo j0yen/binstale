@@ -37,6 +37,22 @@ pub enum BinstaleError {
         source: std::io::Error,
     },
 
+    /// Failed to write an xattr to an on-disk path.
+    #[error("xattr write failed for {path}: {source}")]
+    XattrWrite {
+        /// The file path whose xattr write failed.
+        path: String,
+        /// The underlying I/O error.
+        source: std::io::Error,
+    },
+
+    /// The system clock is before the Unix epoch.
+    #[error("system clock is before Unix epoch: {context}")]
+    ClockError {
+        /// Description of the error.
+        context: String,
+    },
+
     /// An invalid regex was provided.
     #[error("invalid regex: {source}")]
     InvalidRegex {

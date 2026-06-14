@@ -33,7 +33,7 @@ const DEFAULT_MATCH: &str = r"^(agorabus|recalld|wm-(audio|dialog|stt|tts))$";
 #[derive(Debug, Parser)]
 #[command(
     name = "binstale",
-    version = "0.3.0",
+    version = "0.4.0",
     about = "Running-binary staleness detector",
     long_about = "Classifies running processes as: fresh | deleted-exe | inode-drift | prov-stale | behind-head\n\
     \n\
@@ -107,6 +107,31 @@ enum Command {
         #[arg(long, value_enum, default_value_t = FleetFormatArg::Human)]
         format: FleetFormatArg,
     },
+
+    /// Write a `user.prov.ts` xattr to a binary path to clear a prov-stale verdict.
+    ///
+    /// After `cargo install` the on-disk binary gets a fresh xattr timestamp.
+    /// When the old daemon is still running, binstale reports `prov-stale`
+    /// (binary stamp > proc start). Use this subcommand to back-date the stamp
+    /// so the running process sees itself as fresh again.
+    ///
+    /// Priority: --ts > --pid > now (wall clock)
+    ///
+    /// Exit codes: 0=success, 2=error
+    Stamp {
+        /// Path to the binary file to stamp.
+        path: String,
+
+        /// Set user.prov.ts to proc_start_secs(PID) - 1, making that process
+        /// see its binary as fresh. Mutually exclusive with --ts.
+        #[arg(long, conflicts_with = "ts")]
+        pid: Option<u32>,
+
+        /// Explicit Unix timestamp (seconds since epoch) to write.
+        /// Takes precedence over --pid.
+        #[arg(long)]
+        ts: Option<u64>,
+    },
 }
 
 /// Output format selection for `check` / `scan`.
@@ -172,6 +197,7 @@ fn main() {
             run_scan(&pattern, format.into(), no_source, &repo_map)
         }
         Command::Fleet { all, format } => run_fleet(all, format.into(), no_source),
+        Command::Stamp { path, pid, ts } => run_stamp(&path, pid, ts),
     };
 
     process::exit(exit);
@@ -331,6 +357,51 @@ fn run_fleet(all: bool, format: FleetFormat, no_source: bool) -> i32 {
             } else {
                 exit_code::FRESH
             }
+        }
+    }
+}
+
+/// Run the `stamp` subcommand: write `user.prov.ts` xattr to clear a prov-stale verdict.
+fn run_stamp(path: &str, pid: Option<u32>, ts: Option<u64>) -> i32 {
+    let target_ts: u64 = if let Some(explicit) = ts {
+        explicit
+    } else if let Some(p) = pid {
+        match collect_proc_info(p) {
+            Err(binstale::error::BinstaleError::ProcessNotFound { pid: p2 }) => {
+                eprintln!("binstale stamp: process not found: PID {p2}");
+                return exit_code::ERROR;
+            }
+            Err(e) => {
+                eprintln!("binstale stamp: error reading /proc/{p}: {e}");
+                return exit_code::ERROR;
+            }
+            Ok(info) => match info.proc_start_secs {
+                Some(start) => start.saturating_sub(1),
+                None => {
+                    eprintln!("binstale stamp: could not determine start time for PID {p}");
+                    return exit_code::ERROR;
+                }
+            },
+        }
+    } else {
+        match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(d) => d.as_secs(),
+            Err(e) => {
+                eprintln!("binstale stamp: system clock is before Unix epoch: {e}");
+                return exit_code::ERROR;
+            }
+        }
+    };
+
+    let ts_bytes = target_ts.to_string();
+    match xattr::set(path, "user.prov.ts", ts_bytes.as_bytes()) {
+        Ok(()) => {
+            println!("stamped {path}: user.prov.ts = {target_ts}");
+            exit_code::FRESH
+        }
+        Err(e) => {
+            eprintln!("binstale stamp: xattr write failed for {path}: {e}");
+            exit_code::ERROR
         }
     }
 }
