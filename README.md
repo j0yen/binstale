@@ -28,14 +28,23 @@ Priority order: `deleted-exe` > `inode-drift` > `prov-stale` > `behind-head` > `
 
 ```
 binstale check <pid>               # verdict for one PID
-binstale scan [--match <regex>]    # scan /proc/*/comm against regex
-  --format json|table              # default: table
-  --no-source                      # skip git comparison (Fleet-1 behavior)
+binstale scan [--match <regex>]    # scan /proc/*/comm against a regex
+binstale fleet [--all]             # aggregate report over the curated daemon list
+binstale stamp <path> [--pid PID]  # back-date user.prov.ts to clear a prov-stale verdict
 ```
+
+Options:
+
+- `--format json|table` on `check` and `scan` (default `table`). `fleet` takes `--format json|human|docket` (default `human`); `docket` emits ready-to-run `docket report` lines for each non-fresh daemon.
+- `--no-source` (global) skips git invocation and the `behind-head` verdict — reproduces Fleet-1 `/proc`-only behavior in environments without the source repos.
+
+`fleet` walks the curated wintermute daemon list and sorts by verdict priority; `--all` widens it to every running `/proc/PID/exe`, which is expensive.
+
+`stamp` exists for the reinstall race. After `cargo install`, the new on-disk binary carries a fresh xattr, so binstale reports the still-running old process as `prov-stale`. Back-dating the stamp with `--pid <running-pid>` (or an explicit `--ts`) lets that process see itself as fresh again. Priority: `--ts` > `--pid` > now.
 
 Exit codes: `0` = all fresh, `1` = at least one stale, `2` = usage/IO error.
 
-Default `--match` regex: `^(agorabus|recalld|wm-(audio|dialog|stt|tts))$`
+Default `scan --match` regex: `^(agorabus|recalld|wm-(audio|dialog|stt|tts))$`
 
 JSON output keys: `pid`, `comm`, `exe_path`, `exe_inode`, `ondisk_inode`, `prov_ts`, `proc_start`, `verdict`, `evidence`, `source_repo`, `source_head_ts`, `source_head_commit`
 
@@ -68,6 +77,10 @@ my-daemon = "/home/user/projects/my-daemon"
 User entries are merged over built-ins; the same daemon name takes the user value.
 
 When `git` is unavailable or the mapped repo path does not exist, binstale logs a warning to stderr and leaves `source_*` fields `null` — it does not crash, and the exit code is not affected by the git failure alone.
+
+## Where it fits
+
+binstale is a self-review tool for the wintermute daemon fleet — it answers "is this running process actually the binary I think it is?" The default daemon set and source-repo map track the fleet (agorabus, recalld, wm-audio/dialog/stt/tts). It detects; it never restarts anything. Acting on a verdict is left to the operator or to `docket`.
 
 ## Install
 
